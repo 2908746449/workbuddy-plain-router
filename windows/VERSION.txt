@@ -1,0 +1,4 @@
+﻿name=workbuddy-plain-router-portable
+version=20260907
+source=C:\Users\wei\Desktop\workb破甲
+created=2026-09-07T17:32:41.365259+08:00

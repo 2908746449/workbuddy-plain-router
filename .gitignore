@@ -1,0 +1,49 @@
+# 忽略日志文件
+*.log
+*-log.txt
+install-stdout.log
+install-stderr.log
+unlock-all-in-one-log.txt
+install-log.txt
+restore-log.txt
+
+# 忽略备份文件
+*.backup
+*.bak
+*.backup-*
+templates.backup-*
+
+# 忽略 macOS 系统文件
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 忽略临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 忽略 Windows 系统文件
+Thumbs.db
+Desktop.ini
+
+# 忽略压缩包（除了发布版本）
+*.zip
+*.rar
+*.7z
+!release/*.zip
+
+# 忽略 IDE 配置
+.vscode/
+.idea/
+*.sublime-*
+
+# 忽略测试输出
+test-output/
+temp/
+
+# 忽略用户配置
+local-config.json
+user-settings.json
