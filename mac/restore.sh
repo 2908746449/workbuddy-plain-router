@@ -1,75 +1,82 @@
 #!/bin/bash
-# WorkBuddy 恢复脚本 - Mac版本
-
-set -e
+# WorkBuddy Plain Router - macOS Restore Script
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOG_FILE="$SCRIPT_DIR/restore-log.txt"
+STATE_DIR="$HOME/Library/Application Support/WorkBuddy Plain Router"
+LATEST="$STATE_DIR/latest-backup"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/com.workbuddy.plain-router-env.plist"
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
-}
+log() { printf '[INFO] %s\n' "$*"; }
+die() { printf '[FAIL] %s\n' "$*"; exit 1; }
 
-show_msg() {
-    osascript -e "display dialog \"$2\" with title \"$1\" buttons {\"确定\"} default button 1"
-}
+[ -f "$LATEST" ] || die "No backup record found at $LATEST."
+BACKUP_DIR="$(cat "$LATEST")"
+[ -d "$BACKUP_DIR/app-templates" ] || die "Incomplete backup at $BACKUP_DIR."
 
-log "==== WorkBuddy 恢复开始 ===="
-
-# 查找 WorkBuddy.app
-WORKBUDDY_APP=""
-POSSIBLE_PATHS=(
-    "/Applications/WorkBuddy.app"
-    "$HOME/Applications/WorkBuddy.app"
-    "/Applications/CodeBuddy.app"
-    "$HOME/Applications/CodeBuddy.app"
-)
-
-for app_path in "${POSSIBLE_PATHS[@]}"; do
-    if [ -d "$app_path" ]; then
-        WORKBUDDY_APP="$app_path"
-        log "找到应用: $WORKBUDDY_APP"
-        break
-    fi
-done
-
-if [ -z "$WORKBUDDY_APP" ]; then
-    log "ERROR: 未找到 WorkBuddy.app"
-    show_msg "恢复失败" "未找到 WorkBuddy.app"
-    exit 1
+WORKBUDDY_APP="${WORKBUDDY_APP:-}"
+if [ -z "$WORKBUDDY_APP" ] && [ -f "$BACKUP_DIR/app-path" ]; then
+    WORKBUDDY_APP="$(cat "$BACKUP_DIR/app-path")"
+fi
+if [ -z "$WORKBUDDY_APP" ] || [ ! -d "$WORKBUDDY_APP" ]; then
+    POSSIBLE_PATHS=(
+        "/Applications/WorkBuddy AI.app"
+        "/Applications/WorkBuddy.app"
+        "$HOME/Applications/WorkBuddy AI.app"
+        "$HOME/Applications/WorkBuddy.app"
+        "/Applications/CodeBuddy.app"
+        "$HOME/Applications/CodeBuddy.app"
+    )
+    for app_path in "${POSSIBLE_PATHS[@]}"; do
+        if [ -d "$app_path" ]; then
+            WORKBUDDY_APP="$app_path"
+            break
+        fi
+    done
 fi
 
-RESOURCES_DIR="$WORKBUDDY_APP/Contents/Resources"
-TEMPLATE_DIR="$RESOURCES_DIR/app.asar.unpacked/resources/templates"
+[ -n "$WORKBUDDY_APP" ] && [ -d "$WORKBUDDY_APP" ] || die "WorkBuddy application not found."
 
-# 查找最近的备份
-BACKUP_ORIGINAL="$TEMPLATE_DIR.backup-original"
+APP_TPL="$WORKBUDDY_APP/Contents/Resources/app.asar.unpacked/resources/templates"
+APP_WELCOME="$WORKBUDDY_APP/Contents/Resources/app.asar.unpacked/resources/plugins/workbuddy-builtin/welcomemode"
+APP_INFO_PLIST="$WORKBUDDY_APP/Contents/Info.plist"
 
-if [ -L "$BACKUP_ORIGINAL" ]; then
-    BACKUP_DIR=$(readlink "$BACKUP_ORIGINAL")
-    if [ -d "$BACKUP_DIR" ]; then
-        log "找到原始备份: $BACKUP_DIR"
-        log "正在恢复..."
+log "Closing application..."
+APP_BUNDLE_ID=$(defaults read "$APP_INFO_PLIST" CFBundleIdentifier 2>/dev/null || echo "com.workbuddy.workbuddy-ai")
+/usr/bin/osascript -e "tell application id \"$APP_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+sleep 1
+pkill -TERM -f "$WORKBUDDY_APP/Contents/MacOS" >/dev/null 2>&1 || true
 
-        # 删除当前模板目录
-        rm -rf "$TEMPLATE_DIR"
-
-        # 恢复备份
-        cp -r "$BACKUP_DIR" "$TEMPLATE_DIR"
-
-        log "恢复完成"
-        show_msg "恢复完成" "WorkBuddy 模板已恢复到原始状态\n请重启 WorkBuddy"
-    else
-        log "ERROR: 备份目录不存在: $BACKUP_DIR"
-        show_msg "恢复失败" "备份目录不存在"
-        exit 1
-    fi
+log "Restoring templates..."
+cp -R "$BACKUP_DIR/app-templates/." "$APP_TPL/"
+if [ -d "$BACKUP_DIR/welcome" ] && [ -d "$APP_WELCOME" ]; then
+    cp -R "$BACKUP_DIR/welcome/." "$APP_WELCOME/"
+fi
+if [ -f "$BACKUP_DIR/Info.plist" ]; then
+    cp "$BACKUP_DIR/Info.plist" "$APP_INFO_PLIST"
 else
-    log "ERROR: 未找到备份"
-    show_msg "恢复失败" "未找到原始备份，可能未运行过安装脚本"
-    exit 1
+    python3 - "$APP_INFO_PLIST" <<'PY'
+import pathlib, plistlib, sys
+plist_path = pathlib.Path(sys.argv[1])
+with plist_path.open("rb") as f:
+    data = plistlib.load(f)
+env = data.get("LSEnvironment", {})
+env.pop("ACC_PRODUCT_CONFIG_PATH", None)
+env.pop("ACC_PRODUCT_CONFIG_V3", None)
+with plist_path.open("wb") as f:
+    plistlib.dump(data, f, fmt=plistlib.FMT_XML, sort_keys=False)
+PY
 fi
 
-echo ""
-echo "恢复完成！详细日志: $LOG_FILE"
-echo "请重启 WorkBuddy"
+/bin/launchctl unsetenv ACC_PRODUCT_CONFIG_PATH >/dev/null 2>&1 || true
+/bin/launchctl unsetenv ACC_PRODUCT_CONFIG_V3 >/dev/null 2>&1 || true
+/bin/launchctl bootout "gui/$(id -u)/com.workbuddy.plain-router-env" >/dev/null 2>&1 || true
+if [ -f "$LEGACY_PLIST" ]; then mv "$LEGACY_PLIST" "$LEGACY_PLIST.disabled"; fi
+
+log "Re-signing application..."
+/usr/bin/codesign --force --deep --sign - "$WORKBUDDY_APP" >/dev/null
+/usr/bin/codesign --verify --deep --strict "$WORKBUDDY_APP"
+
+echo "============================================================"
+echo "[SUCCESS] Restored original WorkBuddy configuration from: $BACKUP_DIR"
+echo "============================================================"

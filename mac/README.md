@@ -1,26 +1,32 @@
-# WorkBuddy Plain Router Portable - Mac 版本
+# WorkBuddy Plain Router Portable - macOS 版本
 
-适配自 Windows 版本，用于在 macOS 上部署"大白话低误判路由版" WorkBuddy 模板。
+适配自 Windows 版本的“大白话低误判路由版” WorkBuddy 提示模板部署工具。
 
 ## 系统要求
 
-- macOS 10.13 或更高版本
-- WorkBuddy 或 CodeBuddy 已安装在 `/Applications` 或 `~/Applications`
+- macOS 10.15 或更高版本
+- WorkBuddy AI、WorkBuddy 或 CodeBuddy 已安装在 `/Applications` 或 `~/Applications`
+- Python 3（macOS 自带或开发环境自带）
 
 ## 使用方法
 
-1. 解压本目录到任意位置（建议英文路径）
-2. 关闭 WorkBuddy 应用
-3. 打开终端，进入解压目录
-4. 给脚本添加执行权限：
+1. 打开终端，进入 `mac` 目录：
+   ```bash
+   cd mac
+   ```
+2. 授予脚本执行权限：
    ```bash
    chmod +x install.sh restore.sh verify.sh
    ```
-5. 运行安装脚本：
+3. 运行安装脚本：
    ```bash
    ./install.sh
    ```
-6. 安装完成后，重启 WorkBuddy 并新建对话测试
+4. 运行验证脚本检查状态：
+   ```bash
+   ./verify.sh
+   ```
+5. 打开 WorkBuddy，新建一个任务/对话进行测试。
 
 ## 推荐测试语句
 
@@ -36,90 +42,45 @@
 ./verify.sh
 ```
 
-## 回滚
+验证项包括：
+- 应用路径检测（支持 `WorkBuddy AI.app`、`WorkBuddy.app`、`CodeBuddy.app`）
+- 模板文件存在性及路由器特征标记
+- V3 Product Config 配置完整性
+- `Info.plist` 中的持久化环境变量（`ACC_PRODUCT_CONFIG_V3`）
+- 应用代码签名完整性
+- 运行中进程环境变量继承情况
 
-如需恢复原始模板：
+## 回滚恢复
+
+如需恢复原始官方模板：
 
 ```bash
 ./restore.sh
 ```
 
-然后重启 WorkBuddy。
+脚本将自动还原备份的原始模板及 `Info.plist`，清理相关环境变量，并重新对应用进行代码签名。
 
 ## 目录结构
 
 ```
-work-mac/
-├── install.sh              # 主安装脚本
-├── restore.sh              # 恢复脚本
-├── verify.sh               # 验证脚本
-├── README.md               # 本文件
-├── my-template.tpl         # 主提示模板
-├── my-prompt.txt           # 全模板补丁
+mac/
+├── install.sh              # 主安装部署脚本（自动识别应用、备份、写入模板、注入V3配置与重签名）
+├── restore.sh              # 一键回滚恢复脚本
+├── verify.sh               # 环境与配置完整性验证脚本
+├── README.md               # 本文档
+├── my-template.tpl         # 主提示词模板（大白话低误判路由版）
+├── my-prompt.txt           # 插件全模板补丁
+├── v3/                     # V3 Product Config 目录
+│   └── product-config-v3.json
 └── templates/              # 模式模板目录
-    ├── workbuddy-*.tpl     # 各种模式模板
+    ├── workbuddy-*.tpl     # 各种工作模式模板
     └── style/              # 风格模板
 ```
 
-## 工作原理
+## macOS 适配关键改进
 
-安装脚本会：
-
-1. 自动查找 WorkBuddy.app 或 CodeBuddy.app 的安装路径
-2. 备份原始模板到 `templates.backup-*` 目录
-3. 将自定义模板复制到应用的资源目录：
-   - 主模板：`Contents/Resources/app.asar.unpacked/resources/templates/`
-4. 尝试更新用户数据目录中的 welcomemode 插件缓存
-5. 完成后提示重启应用
-
-## 故障排除
-
-### 安装后不生效
-
-1. 运行 `./verify.sh` 检查安装状态
-2. 确认已完全关闭并重启 WorkBuddy
-3. 新建一个对话测试（不要使用旧对话）
-4. 查看日志文件：`install-log.txt`
-
-### 未找到 welcomemode 缓存
-
-这是正常的，首次安装时该缓存可能不存在。解决方法：
-
-1. 先运行 `./install.sh`
-2. 打开 WorkBuddy 新建一次对话
-3. 关闭 WorkBuddy
-4. 再次运行 `./install.sh`
-
-### 权限问题
-
-如果遇到权限错误，可能需要：
-
-```bash
-# 给脚本添加执行权限
-chmod +x *.sh
-
-# 如果修改应用目录需要权限，使用 sudo
-sudo ./install.sh
-```
-
-## 与 Windows 版本的差异
-
-- Windows 使用 PowerShell (.ps1)，Mac 使用 Bash (.sh)
-- 应用路径：Windows 在 `Program Files`，Mac 在 `/Applications`
-- 用户数据目录：
-  - Windows: `%APPDATA%\WorkBuddy`
-  - Mac: `~/Library/Application Support/WorkBuddy`
-- 备份方式：Mac 使用符号链接指向原始备份
-
-## 版本信息
-
-- 原始版本：workbuddy-plain-router-portable v20260907
-- Mac 适配版本：v20260912
-- 源模板来源：Windows 版 work.zip
-
-## 注意事项
-
-- 安装前会自动备份原始模板
-- 每次运行都会创建新的时间戳备份
-- 使用 `restore.sh` 可恢复到安装前状态
-- 不会修改应用本身，仅替换模板文件
+相较于最初版本，当前 macOS 部署体系完成了以下关键适配：
+1. **支持多种命名与路径**：自动探测 `/Applications/WorkBuddy AI.app`、`/Applications/WorkBuddy.app`、`/Applications/CodeBuddy.app` 及用户级应用程序目录。
+2. **V3 配置持久化**：针对新版客户端，自动生成并在 `Contents/Info.plist` 的 `LSEnvironment` 中注入 `ACC_PRODUCT_CONFIG_V3` 配置。
+3. **自动代码重签名**：修改资源与配置后，自动调用 `/usr/bin/codesign --force --deep --sign -` 进行重签名，避免应用被 Gatekeeper 判定损坏或被系统阻止。
+4. **全自动安全备份**：首次安装前在 `~/Library/Application Support/WorkBuddy Plain Router/backups/` 保留基准备份，支持随时零损回滚。

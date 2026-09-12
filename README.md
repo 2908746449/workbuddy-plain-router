@@ -81,6 +81,8 @@ workbuddy-plain-router/
     ├── verify.sh            # 验证脚本
     ├── my-template.tpl      # 主模板
     ├── my-prompt.txt        # 插件补丁
+    ├── v3/                  # V3 配置
+    │   └── product-config-v3.json
     └── templates/           # 模式模板
 ```
 

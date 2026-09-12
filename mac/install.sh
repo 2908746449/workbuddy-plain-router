@@ -1,147 +1,167 @@
 #!/bin/bash
-# WorkBuddy Plain Router Portable - Mac版本
-# 适配自 Windows 版本的 unlock-all-in-one.ps1
-
-set -e
+# WorkBuddy Plain Router - macOS Installer
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOG_FILE="$SCRIPT_DIR/install-log.txt"
+MARKER="大白话技术任务路由器"
+STATE_DIR="$HOME/Library/Application Support/WorkBuddy Plain Router"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$STATE_DIR/backups/$STAMP"
+CONFIG_FILE="$SCRIPT_DIR/v3/product-config-v3.json"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/com.workbuddy.plain-router-env.plist"
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
-}
+log() { printf '[INFO] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*"; }
+die() { printf '[FAIL] %s\n' "$*"; exit 1; }
 
-show_msg() {
-    osascript -e "display dialog \"$2\" with title \"$1\" buttons {\"确定\"} default button 1"
-}
+[ "$(uname -s)" = "Darwin" ] || die "This script is designed for macOS only."
 
-log "==== WorkBuddy Mac 安装开始 ===="
-log "脚本目录: $SCRIPT_DIR"
-
-# 查找 WorkBuddy.app 路径
-WORKBUDDY_APP=""
-POSSIBLE_PATHS=(
-    "/Applications/WorkBuddy.app"
-    "$HOME/Applications/WorkBuddy.app"
-    "/Applications/CodeBuddy.app"
-    "$HOME/Applications/CodeBuddy.app"
-)
-
-log "---- 查找 WorkBuddy 安装位置 ----"
-for app_path in "${POSSIBLE_PATHS[@]}"; do
-    if [ -d "$app_path" ]; then
-        WORKBUDDY_APP="$app_path"
-        log "找到应用: $WORKBUDDY_APP"
-        break
-    fi
-done
-
+# 1. Detect WorkBuddy App
+WORKBUDDY_APP="${WORKBUDDY_APP:-}"
 if [ -z "$WORKBUDDY_APP" ]; then
-    log "ERROR: 未找到 WorkBuddy.app 或 CodeBuddy.app"
-    show_msg "安装失败" "未找到 WorkBuddy.app，请确认已安装 WorkBuddy"
-    exit 1
-fi
-
-# 定位模板目录 (app.asar.unpacked)
-RESOURCES_DIR="$WORKBUDDY_APP/Contents/Resources"
-TEMPLATE_DIR="$RESOURCES_DIR/app.asar.unpacked/resources/templates"
-
-if [ ! -d "$TEMPLATE_DIR" ]; then
-    log "ERROR: 模板目录不存在: $TEMPLATE_DIR"
-    show_msg "安装失败" "未找到模板目录，WorkBuddy 版本可能不兼容"
-    exit 1
-fi
-
-log "模板目录: $TEMPLATE_DIR"
-
-# 备份原始模板
-BACKUP_DIR="$TEMPLATE_DIR.backup-$(date +%Y%m%d-%H%M%S)"
-if [ ! -d "$TEMPLATE_DIR.backup-original" ]; then
-    log "创建原始备份: $BACKUP_DIR"
-    cp -r "$TEMPLATE_DIR" "$BACKUP_DIR"
-    ln -s "$BACKUP_DIR" "$TEMPLATE_DIR.backup-original"
-else
-    log "原始备份已存在，创建本次备份: $BACKUP_DIR"
-    cp -r "$TEMPLATE_DIR" "$BACKUP_DIR"
-fi
-
-# Part 1: 复制模板文件到安装目录
-log "---- Part 1: 同步模板文件 ----"
-if [ -d "$SCRIPT_DIR/templates" ]; then
-    for tpl_file in "$SCRIPT_DIR/templates"/*.tpl; do
-        if [ -f "$tpl_file" ]; then
-            filename=$(basename "$tpl_file")
-            log "复制: $filename"
-            cp "$tpl_file" "$TEMPLATE_DIR/"
+    POSSIBLE_PATHS=(
+        "/Applications/WorkBuddy AI.app"
+        "/Applications/WorkBuddy.app"
+        "$HOME/Applications/WorkBuddy AI.app"
+        "$HOME/Applications/WorkBuddy.app"
+        "/Applications/CodeBuddy.app"
+        "$HOME/Applications/CodeBuddy.app"
+    )
+    for app_path in "${POSSIBLE_PATHS[@]}"; do
+        if [ -d "$app_path" ]; then
+            WORKBUDDY_APP="$app_path"
+            break
         fi
     done
+fi
 
-    # 复制 style 子目录
-    if [ -d "$SCRIPT_DIR/templates/style" ]; then
-        mkdir -p "$TEMPLATE_DIR/style"
-        cp "$SCRIPT_DIR/templates/style"/*.md "$TEMPLATE_DIR/style/" 2>/dev/null || true
-        log "复制: style/*.md"
-    fi
+[ -n "$WORKBUDDY_APP" ] && [ -d "$WORKBUDDY_APP" ] || die "WorkBuddy or CodeBuddy application not found. You can set WORKBUDDY_APP to the application bundle path."
+
+APP_TPL="$WORKBUDDY_APP/Contents/Resources/app.asar.unpacked/resources/templates"
+APP_WELCOME="$WORKBUDDY_APP/Contents/Resources/app.asar.unpacked/resources/plugins/workbuddy-builtin/welcomemode"
+APP_INFO_PLIST="$WORKBUDDY_APP/Contents/Info.plist"
+
+[ -d "$APP_TPL" ] || die "Template directory not found at $APP_TPL (app version may be incompatible)."
+[ -f "$SCRIPT_DIR/my-template.tpl" ] || die "Missing my-template.tpl in $SCRIPT_DIR"
+[ -d "$SCRIPT_DIR/templates" ] || die "Missing templates directory in $SCRIPT_DIR"
+
+echo "============================================================"
+echo " WorkBuddy Plain Router - macOS Installer"
+echo "============================================================"
+echo "Application: $WORKBUDDY_APP"
+echo "Templates:   $APP_TPL"
+
+# Generate V3 config from my-template.tpl
+mkdir -p "$SCRIPT_DIR/v3"
+python3 - "$SCRIPT_DIR/my-template.tpl" "$CONFIG_FILE" <<'PY'
+import json, pathlib, sys
+src, dst = map(pathlib.Path, sys.argv[1:])
+text = src.read_text(encoding="utf-8-sig")
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(json.dumps({"prompts": [{"name": "cli-agent-prompt", "template": text}]}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+PY
+
+# 1. Close application
+log "Step 1/6: Closing application..."
+APP_BUNDLE_ID=$(defaults read "$APP_INFO_PLIST" CFBundleIdentifier 2>/dev/null || echo "com.workbuddy.workbuddy-ai")
+/usr/bin/osascript -e "tell application id \"$APP_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+for _ in {1..20}; do
+    pgrep -f "$WORKBUDDY_APP/Contents/MacOS" >/dev/null 2>&1 || break
+    sleep 0.2
+done
+pkill -TERM -f "$WORKBUDDY_APP/Contents/MacOS" >/dev/null 2>&1 || true
+sleep 1
+
+# 2. Backup
+log "Step 2/6: Backing up baseline..."
+mkdir -p "$STATE_DIR"
+if grep -q "$MARKER" "$APP_TPL/workbuddy-prompt.tpl" 2>/dev/null \
+   && [ -f "$STATE_DIR/latest-backup" ] \
+   && [ -d "$(cat "$STATE_DIR/latest-backup")/app-templates" ]; then
+    BACKUP_DIR="$(cat "$STATE_DIR/latest-backup")"
+    log "  Existing baseline backup retained: $BACKUP_DIR"
 else
-    log "ERROR: templates 目录不存在"
+    mkdir -p "$BACKUP_DIR/app-templates" "$BACKUP_DIR/welcome"
+    cp -R "$APP_TPL/." "$BACKUP_DIR/app-templates/"
+    if [ -d "$APP_WELCOME" ]; then cp -R "$APP_WELCOME/." "$BACKUP_DIR/welcome/"; fi
+    if [ -f "$APP_INFO_PLIST" ]; then cp "$APP_INFO_PLIST" "$BACKUP_DIR/Info.plist"; fi
+    printf '%s\n' "$BACKUP_DIR" > "$STATE_DIR/latest-backup"
+    printf '%s\n' "$WORKBUDDY_APP" > "$BACKUP_DIR/app-path"
+    log "  Created new backup: $BACKUP_DIR"
 fi
 
-# 复制主模板
-if [ -f "$SCRIPT_DIR/my-template.tpl" ]; then
-    log "复制主模板: my-template.tpl -> workbuddy-prompt.tpl"
-    cp "$SCRIPT_DIR/my-template.tpl" "$TEMPLATE_DIR/workbuddy-prompt.tpl"
-fi
+# 3. Install template files
+log "Step 3/6: Installing template resources..."
+cp -R "$SCRIPT_DIR/templates/." "$APP_TPL/"
+cp "$SCRIPT_DIR/my-template.tpl" "$APP_TPL/workbuddy-prompt.tpl"
 
-# Part 2: 处理用户数据目录 (welcomemode 插件模板)
-log "---- Part 2: 用户数据目录 ----"
-USER_DATA_DIR="$HOME/Library/Application Support/WorkBuddy"
-if [ ! -d "$USER_DATA_DIR" ]; then
-    USER_DATA_DIR="$HOME/Library/Application Support/CodeBuddy"
-fi
+# 4. Patch welcome-mode prompt copies if present
+log "Step 4/6: Updating welcome-mode prompt copies..."
+python3 - "$SCRIPT_DIR/my-template.tpl" "$APP_WELCOME" "$HOME" <<'PY'
+import pathlib, re, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig")
+home = pathlib.Path(sys.argv[3])
+m = re.search(r"<content_policy>.*?</content_policy>", source, re.S)
+if not m:
+    sys.exit(0)
+block = m.group(0)
+roots = [
+    pathlib.Path(sys.argv[2]),
+    home / ".workbuddy-ai/plugins/cache/workbuddy-builtin",
+    home / ".workbuddy-ai/plugins/marketplaces/workbuddy-builtin/welcomemode",
+    home / ".workbuddy/plugins/cache/workbuddy-builtin",
+    home / ".workbuddy/plugins/marketplaces/workbuddy-builtin/welcomemode",
+]
+seen, changed = set(), 0
+for root in roots:
+    if not root.exists():
+        continue
+    for path in root.rglob("prompt.tpl"):
+        if path in seen or "welcomemode" not in str(path).lower():
+            continue
+        seen.add(path)
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+            new, count = re.subn(r"<content_policy>.*?</content_policy>", lambda _: block, text, count=1, flags=re.S)
+            if count:
+                path.write_text(new, encoding="utf-8")
+                changed += 1
+        except Exception:
+            pass
+if changed:
+    print(f"  Patched {changed} welcome-mode prompt file(s).")
+PY
 
-if [ -d "$USER_DATA_DIR" ]; then
-    log "用户数据目录: $USER_DATA_DIR"
+# 5. Activate V3 product config in Info.plist & launchctl
+log "Step 5/6: Activating V3 configuration..."
+/bin/launchctl bootout "gui/$(id -u)/com.workbuddy.plain-router-env" >/dev/null 2>&1 || true
+if [ -f "$LEGACY_PLIST" ]; then mv "$LEGACY_PLIST" "$LEGACY_PLIST.disabled"; fi
+/bin/launchctl unsetenv ACC_PRODUCT_CONFIG_PATH >/dev/null 2>&1 || true
+/bin/launchctl setenv ACC_PRODUCT_CONFIG_V3 "$(cat "$CONFIG_FILE")"
 
-    # 查找 welcomemode 插件缓存目录
-    PLUGIN_CACHE=$(find "$USER_DATA_DIR" -type d -name "welcomemode*" 2>/dev/null | head -1)
+python3 - "$APP_INFO_PLIST" "$CONFIG_FILE" <<'PY'
+import pathlib, plistlib, sys
+plist_path, config_path = map(pathlib.Path, sys.argv[1:])
+with plist_path.open("rb") as f:
+    data = plistlib.load(f)
+env = data.setdefault("LSEnvironment", {})
+env.pop("ACC_PRODUCT_CONFIG_PATH", None)
+env["ACC_PRODUCT_CONFIG_V3"] = config_path.read_text(encoding="utf-8")
+with plist_path.open("wb") as f:
+    plistlib.dump(data, f, fmt=plistlib.FMT_XML, sort_keys=False)
+PY
+plutil -lint "$APP_INFO_PLIST" >/dev/null
 
-    if [ -n "$PLUGIN_CACHE" ] && [ -d "$PLUGIN_CACHE" ]; then
-        log "找到 welcomemode 缓存: $PLUGIN_CACHE"
+# 6. Re-sign and verify
+log "Step 6/6: Re-signing and verifying application..."
+/usr/bin/codesign --force --deep --sign - "$WORKBUDDY_APP" >/dev/null
+/usr/bin/codesign --verify --deep --strict "$WORKBUDDY_APP"
 
-        if [ -f "$SCRIPT_DIR/my-prompt.txt" ]; then
-            # 查找 prompt.tpl 文件
-            PROMPT_TPL=$(find "$PLUGIN_CACHE" -name "prompt.tpl" -type f 2>/dev/null | head -1)
-            if [ -n "$PROMPT_TPL" ]; then
-                log "更新 prompt.tpl: $PROMPT_TPL"
-                cp "$SCRIPT_DIR/my-prompt.txt" "$PROMPT_TPL"
-            else
-                log "WARN: 未找到 welcomemode 的 prompt.tpl"
-            fi
-        fi
-    else
-        log "WARN: 未找到 welcomemode 插件缓存（可能需要先打开 WorkBuddy 新建对话）"
-    fi
-else
-    log "WARN: 用户数据目录不存在"
-fi
+grep -q "$MARKER" "$APP_TPL/workbuddy-prompt.tpl" || die "Installed marker verification failed."
+plutil -extract LSEnvironment.ACC_PRODUCT_CONFIG_V3 raw -o - "$APP_INFO_PLIST" | grep -q "$MARKER" || die "Persistent Info.plist configuration verification failed."
 
-# Part 3: 处理 v3 配置（如果存在）
-if [ -f "$SCRIPT_DIR/v3/product-config-v3.json" ]; then
-    log "---- Part 3: V3 配置 ----"
-    V3_CONFIG="$SCRIPT_DIR/v3/product-config-v3.json"
-
-    # 替换路径为 Mac 路径
-    sed "s|C:\\\\Users\\\\wei\\\\Desktop\\\\workb破甲|$SCRIPT_DIR|g" "$V3_CONFIG" > "$SCRIPT_DIR/v3/product-config-v3-mac.json"
-    log "已生成 Mac 版 V3 配置"
-fi
-
-log "==== 安装完成 ===="
-log "备份位置: $BACKUP_DIR"
-log "请重启 WorkBuddy 使更改生效"
-
-show_msg "安装完成" "WorkBuddy 模板已更新，请重启应用使更改生效。\n\n备份位置：\n$BACKUP_DIR"
-
-echo ""
-echo "安装完成！详细日志: $LOG_FILE"
-echo "备份位置: $BACKUP_DIR"
-echo "请重启 WorkBuddy"
+echo "============================================================"
+echo "[SUCCESS] WorkBuddy Plain Router deployed successfully!"
+echo "Backup location: $BACKUP_DIR"
+echo "You can now launch WorkBuddy and start a new task to test."
+echo "============================================================"
